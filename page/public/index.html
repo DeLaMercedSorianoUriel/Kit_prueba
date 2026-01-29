@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Configuración Segura IoT</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #f4f7f6; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .card { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); width: 320px; text-align: center; }
+        h2 { margin-top: 0; color: #333; }
+        input { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }
+        button { width: 100%; padding: 12px; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; margin-top: 5px; }
+        .btn-main { background: #007bff; color: white; }
+        .btn-sec { background: #28a745; color: white; }
+        .hidden { display: none; }
+        #log { font-size: 0.85rem; color: #555; margin-top: 15px; min-height: 20px; background: #eee; padding: 5px; border-radius: 4px;}
+        .loader { border: 3px solid #f3f3f3; border-top: 3px solid #3498db; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; display: inline-block; vertical-align: middle; margin-right: 5px;}
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h2>📡 Configuración</h2>
+    
+    <button id="btnConnect" class="btn-main">1. Conectar Bluetooth</button>
+    
+    <div id="step1" class="hidden">
+        <p>Ingrese Nombre de Red (SSID):</p>
+        <input type="text" id="ssid" placeholder="Ej: TP-Link_C5F0">
+        <button id="btnSendRed" class="btn-main">Enviar Red ➡️</button>
+    </div>
+
+    <div id="step2" class="hidden">
+        <p style="color: green;">✅ Red Confirmada por Arduino</p>
+        <p>Ahora la Contraseña:</p>
+        <input type="password" id="pass" placeholder="Contraseña">
+        <button id="btnSendPass" class="btn-sec">Conectar WiFi 🚀</button>
+    </div>
+
+    <div id="log">Desconectado</div>
+</div>
+
+<script>
+    const serviceUUID = 0xFFE0;
+    const charUUID = 0xFFE1;
+    let charCache = null;
+
+    const btnConnect = document.getElementById('btnConnect');
+    const step1 = document.getElementById('step1');
+    const step2 = document.getElementById('step2');
+    const btnSendRed = document.getElementById('btnSendRed');
+    const btnSendPass = document.getElementById('btnSendPass');
+    const logDiv = document.getElementById('log');
+
+    function log(msg) { logDiv.textContent = msg; }
+
+    // 1. CONEXIÓN Y ACTIVAR NOTIFICACIONES
+    btnConnect.addEventListener('click', async () => {
+        try {
+            log("Buscando...");
+            const device = await navigator.bluetooth.requestDevice({ filters: [{ services: [serviceUUID] }] });
+            const server = await device.gatt.connect();
+            const service = await server.getPrimaryService(serviceUUID);
+            charCache = await service.getCharacteristic(charUUID);
+
+            // --- ESTO ES LO NUEVO: ESCUCHAR AL ARDUINO ---
+            await charCache.startNotifications();
+            charCache.addEventListener('characteristicvaluechanged', handleNotifications);
+
+            log("✅ Conectado. Escuchando...");
+            btnConnect.classList.add('hidden');
+            step1.classList.remove('hidden');
+
+        } catch (error) {
+            log("Error: " + error.message);
+        }
+    });
+
+    // 2. MANEJADOR DE RESPUESTAS DEL ARDUINO
+    function handleNotifications(event) {
+        const value = event.target.value;
+        const decoder = new TextDecoder('utf-8');
+        const msg = decoder.decode(value).trim();
+        
+        console.log("Arduino dice:", msg);
+
+        // SI ARDUINO DICE "OK_RED" -> MOSTRAMOS PASO 2
+        if (msg.includes("OK_RED")) {
+            log("¡Red recibida por Arduino!");
+            step1.classList.add('hidden');
+            step2.classList.remove('hidden');
+        }
+        
+        // SI ARDUINO DICE "OK_PASS" -> FINAL
+        if (msg.includes("OK_PASS")) {
+            log("Credenciales recibidas. Conectando...");
+            step2.innerHTML = "<p>🔄 Intentando conectar al WiFi...</p>";
+        }
+
+        // SI ARDUINO DICE "OK_WIFI" -> EXITO TOTAL
+        if (msg.includes("OK_WIFI")) {
+            log("✨ ¡CONEXIÓN EXITOSA!");
+            alert("¡El dispositivo ya tiene internet!");
+        }
+    }
+
+    // 3. ENVIAR RED
+    btnSendRed.addEventListener('click', async () => {
+        const ssid = document.getElementById('ssid').value;
+        if (!ssid) return alert("Falta el nombre de la red");
+
+        try {
+            log("Enviando Red...");
+            const encoder = new TextEncoder();
+            // Enviamos y esperamos que handleNotifications haga el resto
+            await charCache.writeValue(encoder.encode(`S:${ssid}\n`));
+            btnSendRed.disabled = true;
+            btnSendRed.innerHTML = '<div class="loader"></div> Esperando confirmación...';
+        } catch (error) {
+            log("Error envío: " + error.message);
+            btnSendRed.disabled = false;
+            btnSendRed.textContent = "Reintentar Enviar Red";
+        }
+    });
+
+    // 4. ENVIAR PASSWORD
+    btnSendPass.addEventListener('click', async () => {
+        const p = document.getElementById('pass').value;
+        if (!p) return alert("Falta la contraseña");
+
+        try {
+            log("Enviando Clave...");
+            const encoder = new TextEncoder();
+            await charCache.writeValue(encoder.encode(`P:${p}\n`));
+        } catch (error) {
+            log("Error envío: " + error.message);
+        }
+    });
+</script>
+
+</body>
+</html>
